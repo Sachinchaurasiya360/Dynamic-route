@@ -266,25 +266,35 @@ def calculate_safe_route(start, end, cameras, incidents):
             traceback.print_exc()
             raise Exception(f"Failed to calculate safety scores: {str(e)}")
         
-        total_score = (cctv_score * 0.7) - (incident_score * 0.3)  # CCTV weighted positively, incident risk negatively
+        # Base safety score (minimum 23%)
+        base_score = 23
         
-        # Calculate safety percentage
-        safety_percentage = max(0, min(100, total_score))  # Clamp between 0 and 100
+        # Calculate weighted scores
+        cctv_weight = 0.6
+        incident_weight = 0.2
+        
+        # Calculate total score with base score
+        weighted_cctv = cctv_score * cctv_weight
+        weighted_incident = incident_score * incident_weight
+        total_score = base_score + weighted_cctv + weighted_incident
+        
+        # Ensure minimum 23% and maximum 100%
+        safety_percentage = max(23, min(100, total_score))
         
         # Format route for response
         formatted_route = {
             "name": "Recommended Route",
             "description": f"Route with {round(cctv_score)}% CCTV coverage",
             "route": route['coordinates'],
-            "safety_score": round(total_score),
+            "safety_score": round(safety_percentage),  # Use safety_percentage instead of total_score
             "safety_percentage": safety_percentage,
             "cctv_coverage": f"{round(cctv_score)}%",
             "distance": route['distance'],
             "duration": route['duration'],
-            "color": "#2E86C1"  # Blue color
+            "color": get_safety_color(safety_percentage)  # Add color based on safety score
         }
         
-        print(f"Route calculation complete. Safety score: {round(total_score)}%")
+        print(f"Route calculation complete. Safety score: {round(safety_percentage)}%")
         return {
             "routes": [formatted_route],
             "nearby_cameras": len([c for c in cameras if c.status == 'active']),
@@ -300,6 +310,15 @@ def calculate_safe_route(start, end, cameras, incidents):
             "nearby_cameras": 0,
             "recent_incidents": 0
         }
+
+def get_safety_color(safety_score):
+    """Return color based on safety score"""
+    if safety_score >= 80:
+        return "#28a745"  # Green for high safety
+    elif safety_score >= 50:
+        return "#ffc107"  # Yellow for medium safety
+    else:
+        return "#dc3545"  # Red for lower safety
 
 def calculate_cctv_coverage(waypoints, cameras):
     """Calculate CCTV coverage percentage for a route"""
