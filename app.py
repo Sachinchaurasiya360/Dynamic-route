@@ -1,0 +1,399 @@
+from flask import Flask, request, jsonify, render_template
+from flask_sqlalchemy import SQLAlchemy
+from dotenv import load_dotenv
+from datetime import datetime
+import os
+import math
+import requests
+import time
+from datetime import timedelta
+import traceback
+import json
+
+load_dotenv()
+
+app = Flask(__name__)
+app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///safety.db'
+app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
+
+db = SQLAlchemy(app)
+
+# Database Models
+class Incident(db.Model):
+    __tablename__ = 'incidents'
+    id = db.Column(db.Integer, primary_key=True)
+    latitude = db.Column(db.Float, nullable=False)
+    longitude = db.Column(db.Float, nullable=False)
+    severity = db.Column(db.Integer, nullable=False)  # 1-5 scale
+    timestamp = db.Column(db.DateTime, default=datetime.utcnow)
+
+class Camera(db.Model):
+    __tablename__ = 'cameras'  # Changed from cctv_cameras
+    id = db.Column(db.Integer, primary_key=True)
+    latitude = db.Column(db.Float, nullable=False)
+    longitude = db.Column(db.Float, nullable=False)
+    status = db.Column(db.String(20), default='active')
+
+# Initialize database
+def init_db():
+    print("Initializing database...")
+    try:
+        db.create_all()
+        print("Database tables created successfully")
+        
+        # Add test cameras if none exist
+        if Camera.query.count() == 0:
+            print("Adding test cameras...")
+            test_cameras = [
+                Camera(latitude=23.2599, longitude=77.4126, status='active'),  # MANIT
+                Camera(latitude=23.2333, longitude=77.4333, status='active'),  # New Market
+                Camera(latitude=23.2466, longitude=77.4230, status='active'),  # MP Nagar
+                Camera(latitude=23.2515, longitude=77.4029, status='active'),  # Bittan Market
+            ]
+            for camera in test_cameras:
+                db.session.add(camera)
+            
+            # Add test incidents
+            test_incidents = [
+                Incident(latitude=23.2450, longitude=77.4200, severity=3, 
+                        timestamp=datetime.now()),
+                Incident(latitude=23.2400, longitude=77.4150, severity=1, 
+                        timestamp=datetime.now()),
+            ]
+            for incident in test_incidents:
+                db.session.add(incident)
+            
+            db.session.commit()
+            print("Test data added successfully")
+    except Exception as e:
+        print(f"Error initializing database: {str(e)}")
+        traceback.print_exc()
+
+# Create tables and add test data when app starts
+with app.app_context():
+    init_db()
+
+@app.route('/')
+def home():
+    return render_template('index.html')
+
+@app.route('/api/safe-route', methods=['POST'])
+def find_safe_route():
+    try:
+        data = request.get_json()
+        print(f"Received route request: {data}")
+
+        if not data or 'start' not in data or 'end' not in data:
+            return jsonify({"error": "Missing start or end coordinates"}), 400
+            
+        start = data['start']
+        end = data['end']
+        
+        # Validate coordinates
+        if not all(key in start for key in ['lat', 'lng']) or not all(key in end for key in ['lat', 'lng']):
+            return jsonify({"error": "Invalid coordinate format"}), 400
+            
+        try:
+            # Convert coordinates to float and validate ranges
+            start_lat = float(start['lat'])
+            start_lng = float(start['lng'])
+            end_lat = float(end['lat'])
+            end_lng = float(end['lng'])
+            
+            if not (-90 <= start_lat <= 90) or not (-180 <= start_lng <= 180) or \
+               not (-90 <= end_lat <= 90) or not (-180 <= end_lng <= 180):
+                return jsonify({"error": "Coordinates out of valid range"}), 400
+                
+        except (ValueError, TypeError):
+            return jsonify({"error": "Invalid coordinate values"}), 400
+
+        print(f"Using coordinates - Start: {start}, End: {end}")
+
+        # Get active cameras and recent incidents
+        cameras = Camera.query.all()
+        incidents = Incident.query.filter(
+            Incident.timestamp >= (datetime.now() - timedelta(days=30))
+        ).all()
+
+        print(f"Found {len(cameras)} cameras and {len(incidents)} recent incidents")
+
+        # Get the route
+        route_data = calculate_safe_route(start, end, cameras, incidents)
+        if 'error' in route_data:
+            return jsonify({"error": route_data['error']}), 500
+
+        return jsonify(route_data)
+
+    except Exception as e:
+        print(f"Error processing request: {str(e)}")
+        traceback.print_exc()
+        return jsonify({"error": f"Internal server error: {str(e)}"}), 500
+
+@app.route('/api/report-incident', methods=['POST'])
+def report_incident():
+    """Report a safety incident at a location"""
+    try:
+        data = request.get_json()
+        
+        # Validate required fields
+        required_fields = ['latitude', 'longitude', 'severity']
+        if not all(field in data for field in required_fields):
+            return jsonify({"error": "Missing required fields"}), 400
+            
+        # Validate coordinates
+        try:
+            lat = float(data['latitude'])
+            lng = float(data['longitude'])
+            if not (-90 <= lat <= 90) or not (-180 <= lng <= 180):
+                raise ValueError
+        except (ValueError, TypeError):
+            return jsonify({"error": "Invalid coordinates"}), 400
+            
+        # Validate severity (1-5)
+        try:
+            severity = int(data['severity'])
+            if not (1 <= severity <= 5):
+                raise ValueError
+        except (ValueError, TypeError):
+            return jsonify({"error": "Severity must be an integer between 1 and 5"}), 400
+        
+        # Create and save the incident
+        new_incident = Incident(
+            latitude=lat,
+            longitude=lng,
+            severity=severity,
+            timestamp=datetime.utcnow()
+        )
+        
+        db.session.add(new_incident)
+        db.session.commit()
+        
+        return jsonify({
+            "message": "Incident reported successfully",
+            "incident_id": new_incident.id
+        })
+        
+    except Exception as e:
+        print(f"Error reporting incident: {str(e)}")
+        traceback.print_exc()
+        db.session.rollback()
+        return jsonify({"error": "Failed to report incident"}), 500
+
+def get_osrm_route(start, end):
+    """Get a single route from OSRM"""
+    try:
+        print(f"Requesting OSRM route from {start} to {end}")
+        
+        # Construct OSRM URL with coordinates
+        url = f"http://router.project-osrm.org/route/v1/driving/{start['lng']},{start['lat']};{end['lng']},{end['lat']}?steps=true&geometries=geojson&overview=full"
+        print(f"OSRM URL: {url}")
+        
+        # Make request to OSRM
+        response = requests.get(url, timeout=10)
+        print(f"Response status code: {response.status_code}")
+        print(f"Response headers: {dict(response.headers)}")
+        
+        if not response.ok:
+            print(f"OSRM request failed with status {response.status_code}")
+            print(f"Response content: {response.text[:500]}")  # Print first 500 chars to avoid flooding logs
+            raise Exception(f"Failed to get response from OSRM. Status: {response.status_code}")
+
+        # Try to parse JSON and catch specific JSON decode errors
+        try:
+            data = response.json()
+        except json.JSONDecodeError as je:
+            print(f"JSON decode error: {str(je)}")
+            print(f"Response content (first 500 chars): {response.text[:500]}")
+            raise Exception(f"Failed to parse OSRM response as JSON: {str(je)}")
+
+        print(f"OSRM response parsed successfully")
+        print(f"OSRM response: {data}")  # Debug log
+        
+        if data.get('code') != 'Ok':
+            print(f"OSRM error response: {data}")
+            raise Exception(f"OSRM error: {data.get('message', 'Unknown error')}")
+
+        if 'routes' not in data or not data['routes']:
+            raise Exception("No routes found in OSRM response")
+
+        # Get the first route
+        route = data['routes'][0]
+        
+        # Extract coordinates from the GeoJSON geometry
+        if 'geometry' not in route or 'coordinates' not in route['geometry']:
+            raise Exception("Invalid route geometry from OSRM")
+            
+        # Convert coordinates from [lon, lat] to [lat, lon] format
+        coordinates = [[point[1], point[0]] for point in route['geometry']['coordinates']]
+        
+        # Format duration
+        duration_mins = int(route['duration'] / 60)
+        duration_text = f"{duration_mins} min" if duration_mins < 60 else f"{duration_mins // 60} hr {duration_mins % 60} min"
+        
+        route_data = {
+            "coordinates": coordinates,
+            "distance": round(route['distance'] / 1000, 1),  # Convert to km and round
+            "duration": duration_text
+        }
+        
+        print(f"Route processed successfully with {len(coordinates)} points")
+        return route_data
+        
+    except Exception as e:
+        print(f"Error getting OSRM route: {str(e)}")
+        traceback.print_exc()
+        return None
+
+def calculate_safe_route(start, end, cameras, incidents):
+    try:
+        print("Starting route calculation")
+        
+        # Get single route from OSRM
+        route = get_osrm_route(start, end)
+        if not route:
+            raise Exception("Could not get route from OSRM")
+        
+        # Calculate safety scores
+        print("Calculating safety scores")
+        waypoints = [{"lat": coord[0], "lng": coord[1]} for coord in route['coordinates']]
+        
+        try:
+            cctv_score = calculate_cctv_coverage(waypoints, cameras)
+            incident_score = calculate_incident_risk(waypoints, incidents)
+            print(f"Safety scores calculated - CCTV: {cctv_score}, Incident: {incident_score}")
+        except Exception as e:
+            print(f"Error calculating safety scores: {str(e)}")
+            traceback.print_exc()
+            raise Exception(f"Failed to calculate safety scores: {str(e)}")
+        
+        total_score = (cctv_score * 0.7) - (incident_score * 0.3)  # CCTV weighted positively, incident risk negatively
+        
+        # Calculate safety percentage
+        safety_percentage = max(0, min(100, total_score))  # Clamp between 0 and 100
+        
+        # Format route for response
+        formatted_route = {
+            "name": "Recommended Route",
+            "description": f"Route with {round(cctv_score)}% CCTV coverage",
+            "route": route['coordinates'],
+            "safety_score": round(total_score),
+            "safety_percentage": safety_percentage,
+            "cctv_coverage": f"{round(cctv_score)}%",
+            "distance": route['distance'],
+            "duration": route['duration'],
+            "color": "#2E86C1"  # Blue color
+        }
+        
+        print(f"Route calculation complete. Safety score: {round(total_score)}%")
+        return {
+            "routes": [formatted_route],
+            "nearby_cameras": len([c for c in cameras if c.status == 'active']),
+            "recent_incidents": len(incidents)
+        }
+        
+    except Exception as e:
+        print(f"Error in calculate_safe_route: {str(e)}")
+        traceback.print_exc()
+        return {
+            "error": str(e),
+            "routes": [],
+            "nearby_cameras": 0,
+            "recent_incidents": 0
+        }
+
+def calculate_cctv_coverage(waypoints, cameras):
+    """Calculate CCTV coverage percentage for a route"""
+    try:
+        if not waypoints or not cameras:
+            print("No waypoints or cameras provided for CCTV coverage calculation")
+            return 0
+            
+        total_points = len(waypoints)
+        covered_points = 0
+        camera_range = 0.1  # 100 meters in degrees (approximately)
+        
+        print(f"Calculating CCTV coverage for {total_points} waypoints and {len(cameras)} cameras")
+        
+        for point in waypoints:
+            for camera in cameras:
+                if camera.status != 'active':
+                    continue
+                    
+                distance = calculate_distance(
+                    point['lat'], point['lng'],
+                    camera.latitude, camera.longitude
+                )
+                
+                if distance <= camera_range:
+                    covered_points += 1
+                    break  # Point is covered, move to next point
+        
+        coverage = (covered_points / total_points) * 100 if total_points > 0 else 0
+        print(f"CCTV Coverage: {coverage}% ({covered_points}/{total_points} points covered)")
+        return coverage
+        
+    except Exception as e:
+        print(f"Error calculating CCTV coverage: {str(e)}")
+        traceback.print_exc()
+        return 0
+
+def calculate_incident_risk(waypoints, incidents):
+    """Calculate safety score based on reported incidents near the route"""
+    try:
+        if not waypoints or not incidents:
+            print("No waypoints or incidents provided for risk calculation")
+            return 100  # If no incidents, route is considered safe
+            
+        total_points = len(waypoints)
+        safe_points = 0
+        incident_range = 0.1  # 100 meters in degrees (approximately)
+        
+        print(f"Calculating incident risk for {total_points} waypoints and {len(incidents)} incidents")
+        
+        for point in waypoints:
+            point_is_safe = True
+            for incident in incidents:
+                distance = calculate_distance(
+                    point['lat'], point['lng'],
+                    incident.latitude, incident.longitude
+                )
+                
+                if distance <= incident_range:
+                    # Weight by severity and recency
+                    days_old = (datetime.now() - incident.timestamp).days
+                    if days_old <= 30:  # Only consider incidents within last 30 days
+                        point_is_safe = False
+                        break
+            
+            if point_is_safe:
+                safe_points += 1
+        
+        safety_score = (safe_points / total_points) * 100 if total_points > 0 else 100
+        print(f"Incident Safety Score: {safety_score}% ({safe_points}/{total_points} points safe)")
+        return safety_score
+        
+    except Exception as e:
+        print(f"Error calculating incident risk: {str(e)}")
+        traceback.print_exc()
+        return 100  # Default to safe if calculation fails
+
+def calculate_distance(lat1, lon1, lat2, lon2):
+    """Calculate distance between two points in kilometers using Haversine formula"""
+    try:
+        R = 6371  # Earth's radius in kilometers
+        
+        lat1, lon1, lat2, lon2 = map(math.radians, [lat1, lon1, lat2, lon2])
+        dlat = lat2 - lat1
+        dlon = lon2 - lon1
+        
+        a = math.sin(dlat/2)**2 + math.cos(lat1) * math.cos(lat2) * math.sin(dlon/2)**2
+        c = 2 * math.asin(math.sqrt(a))
+        distance = R * c
+        
+        return distance
+    except Exception as e:
+        print(f"Error calculating distance: {str(e)}")
+        return float('inf')  # Return infinite distance on error to avoid false positives
+
+if __name__ == '__main__':
+    app.run(debug=True)
