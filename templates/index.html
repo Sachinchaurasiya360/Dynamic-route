@@ -117,6 +117,32 @@
         .location-input-container {
             position: relative;
         }
+        .incident-marker {
+            background-color: #dc3545;
+            border: 2px solid white;
+            border-radius: 50%;
+            width: 12px !important;
+            height: 12px !important;
+            box-shadow: 0 0 8px rgba(220, 53, 69, 0.5);
+        }
+        .incident-marker:hover {
+            transform: scale(1.2);
+            transition: transform 0.2s;
+        }
+        .incident-pulse {
+            animation: pulse 1.5s infinite;
+        }
+        @keyframes pulse {
+            0% {
+                box-shadow: 0 0 0 0 rgba(220, 53, 69, 0.7);
+            }
+            70% {
+                box-shadow: 0 0 0 10px rgba(220, 53, 69, 0);
+            }
+            100% {
+                box-shadow: 0 0 0 0 rgba(220, 53, 69, 0);
+            }
+        }
     </style>
 </head>
 <body>
@@ -205,6 +231,7 @@
         let map;
         let routeLayers = [];
         let markers = [];
+        let incidentMarkers = [];
         let selectedLocations = {
             start: null,
             destination: null
@@ -315,11 +342,13 @@
             }
 
             try {
-                // Clear existing routes
+                // Clear existing routes and markers
                 routeLayers.forEach(layer => map.removeLayer(layer));
                 routeLayers = [];
                 markers.forEach(marker => map.removeLayer(marker));
                 markers = [];
+                incidentMarkers.forEach(marker => map.removeLayer(marker));
+                incidentMarkers = [];
 
                 // Add loading indicator
                 document.getElementById('loadingIndicator').style.display = 'block';
@@ -355,9 +384,24 @@
                 }
 
                 console.log('Route data:', data);
-                
-                if (!data.routes || data.routes.length === 0) {
-                    throw new Error('No routes found');
+
+                // Add incident markers
+                if (data.incidents) {
+                    data.incidents.forEach(incident => {
+                        const marker = L.marker([incident.latitude, incident.longitude], {
+                            icon: L.divIcon({
+                                className: 'incident-marker incident-pulse',
+                                html: '<div></div>'
+                            })
+                        }).addTo(map);
+                        
+                        marker.bindPopup(`
+                            <strong>⚠️ High Risk Area</strong><br>
+                            <small>This area has reported incidents</small>
+                        `);
+                        
+                        incidentMarkers.push(marker);
+                    });
                 }
 
                 // Add markers for selected locations
@@ -380,7 +424,7 @@
                 markers.push(endMarker);
 
                 updateMap(data.routes);
-                updateRoutesList(data.routes);  // Add this line to update the routes list
+                updateRoutesList(data.routes);
                 document.getElementById('cctvCount').textContent = data.nearby_cameras || '0';
                 document.getElementById('incidentCount').textContent = data.recent_incidents || '0';
 

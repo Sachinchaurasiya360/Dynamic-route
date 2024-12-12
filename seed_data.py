@@ -87,6 +87,21 @@ def seed_database():
             Incident(latitude=23.2599, longitude=77.4126, severity=2),  # MP Nagar
             Incident(latitude=23.2517, longitude=77.4027, severity=1),  # New Market
             Incident(latitude=23.2707, longitude=77.4013, severity=1),  # TT Nagar
+            
+            # LNCT Area Crime Hotspots
+            Incident(latitude=23.2817, longitude=77.4044, severity=3),  # Near LNCT back gate
+            Incident(latitude=23.2797, longitude=77.4034, severity=3),  # LNCT approach road
+            Incident(latitude=23.2787, longitude=77.4014, severity=3),  # Dark spot near LNCT
+            
+            # Bhopal Junction Area Crime Hotspots
+            Incident(latitude=23.2819, longitude=77.3471, severity=3),  # Railway colony area
+            Incident(latitude=23.2829, longitude=77.3451, severity=3),  # Station back entrance
+            Incident(latitude=23.2799, longitude=77.3481, severity=3),  # Isolated area near tracks
+            
+            # Additional High-Risk Areas
+            Incident(latitude=23.2789, longitude=77.4001, severity=3),  # Isolated spot
+            Incident(latitude=23.2772, longitude=77.3921, severity=3),  # Dark area
+            Incident(latitude=23.2834, longitude=77.3812, severity=3),  # Poorly lit zone
         ]
 
         # Add all cameras and incidents to database

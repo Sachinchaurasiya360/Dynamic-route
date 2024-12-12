@@ -122,6 +122,17 @@ def find_safe_route():
         if 'error' in route_data:
             return jsonify({"error": route_data['error']}), 500
 
+        # Add incidents to the response
+        incident_data = [{
+            'latitude': incident.latitude,
+            'longitude': incident.longitude,
+            'severity': incident.severity,
+            'timestamp': incident.timestamp.isoformat()
+        } for incident in incidents]
+
+        # Add incidents to the response
+        route_data['incidents'] = incident_data
+
         return jsonify(route_data)
 
     except Exception as e:
@@ -269,14 +280,14 @@ def calculate_safe_route(start, end, cameras, incidents):
         # Base safety score (minimum 23%)
         base_score = 23
         
-        # Calculate weighted scores
+        # Calculate weighted scores with higher penalty for high-risk areas
         cctv_weight = 0.6
-        incident_weight = 0.2
+        incident_weight = 0.4  # Increased weight for incidents
         
         # Calculate total score with base score
         weighted_cctv = cctv_score * cctv_weight
         weighted_incident = incident_score * incident_weight
-        total_score = base_score + weighted_cctv + weighted_incident
+        total_score = base_score + weighted_cctv - (weighted_incident * 1.5)  # Increased penalty for incidents
         
         # Ensure minimum 23% and maximum 100%
         safety_percentage = max(23, min(100, total_score))
@@ -284,14 +295,14 @@ def calculate_safe_route(start, end, cameras, incidents):
         # Format route for response
         formatted_route = {
             "name": "Recommended Route",
-            "description": f"Route with {round(cctv_score)}% CCTV coverage",
+            "description": get_route_description(safety_percentage, cctv_score, incident_score),
             "route": route['coordinates'],
-            "safety_score": round(safety_percentage),  # Use safety_percentage instead of total_score
+            "safety_score": round(safety_percentage),
             "safety_percentage": safety_percentage,
             "cctv_coverage": f"{round(cctv_score)}%",
             "distance": route['distance'],
             "duration": route['duration'],
-            "color": get_safety_color(safety_percentage)  # Add color based on safety score
+            "color": get_safety_color(safety_percentage)
         }
         
         print(f"Route calculation complete. Safety score: {round(safety_percentage)}%")
@@ -310,6 +321,15 @@ def calculate_safe_route(start, end, cameras, incidents):
             "nearby_cameras": 0,
             "recent_incidents": 0
         }
+
+def get_route_description(safety_score, cctv_score, incident_score):
+    """Generate a descriptive message about the route's safety"""
+    if safety_score >= 80:
+        return f"Very safe route with {round(cctv_score)}% CCTV coverage"
+    elif safety_score >= 50:
+        return f"Moderately safe route, {round(cctv_score)}% CCTV coverage"
+    else:
+        return f"Exercise caution on this route, {round(cctv_score)}% CCTV coverage"
 
 def get_safety_color(safety_score):
     """Return color based on safety score"""
@@ -361,40 +381,42 @@ def calculate_incident_risk(waypoints, incidents):
     try:
         if not waypoints or not incidents:
             print("No waypoints or incidents provided for risk calculation")
-            return 100  # If no incidents, route is considered safe
+            return 0  # Changed to 0 to indicate no risk data
             
         total_points = len(waypoints)
-        safe_points = 0
-        incident_range = 0.1  # 100 meters in degrees (approximately)
+        risk_points = 0
+        incident_range = 0.2  # Increased range to 200 meters
+        high_risk_range = 0.1  # 100 meters for high-risk areas
         
         print(f"Calculating incident risk for {total_points} waypoints and {len(incidents)} incidents")
         
         for point in waypoints:
-            point_is_safe = True
+            point_risk = 0
             for incident in incidents:
                 distance = calculate_distance(
                     point['lat'], point['lng'],
                     incident.latitude, incident.longitude
                 )
                 
-                if distance <= incident_range:
-                    # Weight by severity and recency
-                    days_old = (datetime.now() - incident.timestamp).days
-                    if days_old <= 30:  # Only consider incidents within last 30 days
-                        point_is_safe = False
-                        break
+                # Calculate risk based on distance and severity
+                if distance <= high_risk_range:
+                    point_risk = max(point_risk, incident.severity * 2)  # Double risk for very close incidents
+                elif distance <= incident_range:
+                    point_risk = max(point_risk, incident.severity)
             
-            if point_is_safe:
-                safe_points += 1
+            risk_points += point_risk
         
-        safety_score = (safe_points / total_points) * 100 if total_points > 0 else 100
-        print(f"Incident Safety Score: {safety_score}% ({safe_points}/{total_points} points safe)")
+        # Calculate average risk and convert to safety score
+        avg_risk = (risk_points / total_points) if total_points > 0 else 0
+        safety_score = max(0, 100 - (avg_risk * 20))  # Convert risk to safety score
+        
+        print(f"Incident Safety Score: {safety_score}% (risk points: {risk_points}/{total_points})")
         return safety_score
         
     except Exception as e:
         print(f"Error calculating incident risk: {str(e)}")
         traceback.print_exc()
-        return 100  # Default to safe if calculation fails
+        return 0  # Return 0 risk if calculation fails
 
 def calculate_distance(lat1, lon1, lat2, lon2):
     """Calculate distance between two points in kilometers using Haversine formula"""
