@@ -1,6 +1,6 @@
 # Women Safety Route Recommender
 
-A comprehensive safety application that utilizes CCTV networks and historical incident data to recommend secure routes for women travelers.
+A comprehensive safety application that utilizes CCTV networks and historical incident data to recommend secure routes for women travelers in Mumbai.
 
 ## Features
 
@@ -48,9 +48,9 @@ A comprehensive safety application that utilizes CCTV networks and historical in
 women-safety-route/
 ├── app.py              # Main Flask application
 ├── requirements.txt    # Python dependencies
-├── static/            
+├── static/
 │   └── css/           # CSS styles
-├── templates/         
+├── templates/
 │   └── index.html     # Main template
 └── README.md          # Project documentation
 ```

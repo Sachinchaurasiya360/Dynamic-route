@@ -45,19 +45,19 @@ def init_db():
         if Camera.query.count() == 0:
             print("Adding test cameras...")
             test_cameras = [
-                Camera(latitude=23.2599, longitude=77.4126, status='active'),  # MANIT
-                Camera(latitude=23.2333, longitude=77.4333, status='active'),  # New Market
-                Camera(latitude=23.2466, longitude=77.4230, status='active'),  # MP Nagar
-                Camera(latitude=23.2515, longitude=77.4029, status='active'),  # Bittan Market
+                Camera(latitude=19.0760, longitude=72.8777, status='active'),  # Mumbai Central
+                Camera(latitude=19.0330, longitude=72.8477, status='active'),  # Colaba
+                Camera(latitude=19.1136, longitude=72.8697, status='active'),  # Dadar
+                Camera(latitude=19.0596, longitude=72.8295, status='active'),  # Churchgate
             ]
             for camera in test_cameras:
                 db.session.add(camera)
             
             # Add test incidents
             test_incidents = [
-                Incident(latitude=23.2450, longitude=77.4200, severity=3, 
+                Incident(latitude=19.0700, longitude=72.8700, severity=3, 
                         timestamp=datetime.now()),
-                Incident(latitude=23.2400, longitude=77.4150, severity=1, 
+                Incident(latitude=19.0400, longitude=72.8500, severity=1, 
                         timestamp=datetime.now()),
             ]
             for incident in test_incidents:
